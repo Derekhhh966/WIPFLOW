@@ -30,7 +30,7 @@
 <body>
 <div class="card">
   <h1>WIPFLOW</h1>
-  <div class="sub">create your account &middot; get the game</div>
+  <div class="sub" id="sub">create your account &middot; get the game</div>
 
   <div id="form">
     <label>USERNAME <span style="opacity:.6">(shown above your head)</span></label>
@@ -45,7 +45,8 @@
 
   <div id="done" class="hide">
     <div class="linkbox">
-      <b>Account created.</b><br>
+      <b id="donetitle">Account created.</b><br>
+      <span id="donefriend"></span>
       1. Check your inbox for the WIPFLOW verification e-mail and click the link.<br>
       2. Get the game here:<br><a id="dllink" href="https://github.com/Derekhhh966/WIPFLOW/releases/latest/download/WIPFLOW.exe.zip">Download WIPFLOW (Windows)</a><br>
       3. Unzip, run WIPFLOW.exe, and <b>log in with this same e-mail</b>.
@@ -61,10 +62,41 @@ const PROJECT = "wipflo";
 const FS = "https://firestore.googleapis.com/v1/projects/" + PROJECT + "/databases/(default)/documents/";
 const IDP = "https://identitytoolkit.googleapis.com/v1/accounts:";
 
+// the QR carries the inviter: .../?ref=<their uid>. Registering through it
+// makes the friendship automatic on both sides.
+const REF = new URLSearchParams(location.search).get("ref") || "";
+let inviterName = "";
+
 const $ = id => document.getElementById(id);
 const msg = (t, cls) => { $("msg").textContent = t; $("msg").className = cls || ""; };
+const fsVal = v => v === true ? { booleanValue: true }
+  : typeof v === "number" ? { doubleValue: v } : { stringValue: String(v) };
+const enc = f => { const o = {}; for (const k in f) o[k] = fsVal(f[k]); return o; };
+const patch = (tok, path, fields) => fetch(FS + path + "?key=" + API_KEY, {
+  method: "PATCH",
+  headers: { "Content-Type": "application/json", "Authorization": "Bearer " + tok },
+  body: JSON.stringify({ fields: enc(fields) }) });
 
-$("uname").addEventListener("input", () => { msg(""); });
+(async () => {
+  if (REF === "") return;
+  try {
+    const r = await fetch(FS + ":runQuery?key=" + API_KEY, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ structuredQuery: { from: [{ collectionId: "usernames" }],
+        where: { fieldFilter: { field: { fieldPath: "owner" }, op: "EQUAL",
+          value: { stringValue: REF } } } } }) });
+    const arr = await r.json();
+    if (Array.isArray(arr)) {
+      for (const it of arr) {
+        if (it && it.document) { inviterName = it.document.name.split("/").pop(); break; }
+      }
+    }
+  } catch (e) { /* greeting is best-effort */ }
+  if (inviterName !== "") {
+    $("sub").innerHTML = "<b>" + inviterName + "</b> invited you to WIPFLOW" +
+      " &mdash; create your account and you become their friend.";
+  }
+})();
 
 $("go").onclick = async () => {
   const uname = $("uname").value.trim().toLowerCase();
@@ -91,25 +123,37 @@ $("go").onclick = async () => {
       return fail("could not create the account (" + c + ")");
     }
     const uid = reg.localId, tok = reg.idToken;
-    const patch = (path, fields) => fetch(FS + path + "?key=" + API_KEY, {
-      method: "PATCH", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + tok },
-      body: JSON.stringify({ fields }) });
-    const fs = (k, v) => v === true ? { booleanValue: true } : typeof v === "number" ? { doubleValue: v } : { stringValue: String(v) };
-    const enc = f => { const o = {}; for (const k in f) o[k] = fs(k, f[k]); return o; };
     $("go").textContent = "SAVING PROFILE...";
-    let w = await patch("profiles/" + uid, enc({
+    let w = await patch(tok, "profiles/" + uid, {
       username: uname, email: mail, email_verified: false,
-      registered_at: Math.floor(Date.now() / 1000) }));
+      registered_at: Math.floor(Date.now() / 1000) });
     if (!w.ok) throw new Error("profile write " + w.status);
-    w = await patch("usernames/" + encodeURIComponent(uname), enc({ owner: uid, claimed_at: Math.floor(Date.now() / 1000) }));
+    w = await patch(tok, "usernames/" + encodeURIComponent(uname), { owner: uid, claimed_at: Math.floor(Date.now() / 1000) });
     if (!w.ok) throw new Error("username claim " + w.status);
-    w = await patch("emails/" + encodeURIComponent(mail), enc({ owner: uid }));
+    w = await patch(tok, "emails/" + encodeURIComponent(mail), { owner: uid });
     if (!w.ok) throw new Error("e-mail index " + w.status);
+    // invited through someone's QR: friendship both ways, automatically.
+    // (a) THEY get the inviter on their own friends list right here;
+    let friendNote = "";
+    if (REF !== "") {
+      w = await patch(tok, "friends/" + uid, { friends: [
+        { uid: { stringValue: REF },
+          name: { stringValue: inviterName || "friend" },
+          mail: { stringValue: "" } } ] });
+      if (w.ok) friendNote = "You are now <b>" + (inviterName || "your inviter") +
+        "</b>'s friend - they will be in your Friends list in the game.<br>";
+      // (b) the INVITER's game is told via a stamped presence doc
+      await patch(tok, "presence/" + uid, {
+        owner_uid: uid, owner_name: uname, invited_by: REF,
+        host: false, updated: Math.floor(Date.now() / 1000) });
+    }
     $("go").textContent = "SENDING VERIFICATION...";
     r = await fetch(IDP + "sendOobCode?key=" + API_KEY, {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({ requestType: "VERIFY_EMAIL", idToken: tok }) });
     if (!r.ok) $("msg2").textContent = "(the verification e-mail could not be sent - use RESEND in the game after logging in)";
+    $("donetitle").textContent = "Account created - welcome" + (inviterName !== "" ? " to " + inviterName + "'s circle" : "") + "!";
+    $("donefriend").innerHTML = friendNote;
     $("form").classList.add("hide");
     $("done").classList.remove("hide");
   } catch (e) { fail("something went wrong: " + e.message); }
