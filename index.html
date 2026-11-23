@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WIPFLOW - create your account</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+         background:#191320; color:#e8d9c2; font-family:'Segoe UI',system-ui,sans-serif; }
+  .card { background:#211b30; border-radius:14px; padding:28px 26px; width:min(420px,92vw);
+          box-shadow:0 18px 50px rgba(0,0,0,.45); }
+  h1 { font-size:26px; margin:0 0 4px; letter-spacing:2px; color:#e8d9c2; text-align:center; }
+  .sub { font-size:13px; color:#e8d9c2aa; text-align:center; margin-bottom:20px; }
+  label { display:block; font-size:12px; color:#e8d9c2bb; margin:12px 0 4px; letter-spacing:.4px; }
+  input { width:100%; box-sizing:border-box; background:#151019; border:1px solid #3a3147;
+          border-radius:8px; color:#e8d9c2; padding:10px 12px; font-size:15px; }
+  input:focus { outline:none; border-color:#7a5f9e; }
+  button { width:100%; margin-top:18px; background:#6d4fa3; color:#fff; border:0; border-radius:8px;
+           padding:12px; font-size:16px; cursor:pointer; letter-spacing:1px; }
+  button:disabled { opacity:.55; cursor:default; }
+  #msg { margin-top:14px; font-size:13px; line-height:1.5; min-height:20px; color:#e8d9c2cc; white-space:pre-wrap; }
+  .ok { color:#9fd8a8; }
+  .bad { color:#e3a1a1; }
+  .hide { display:none; }
+  a { color:#b9a5e6; word-break:break-all; }
+  .linkbox { margin-top:14px; background:#151019; border:1px solid #3a3147; border-radius:8px; padding:12px; font-size:13px; line-height:1.6; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>WIPFLOW</h1>
+  <div class="sub">create your account &middot; get the game</div>
+
+  <div id="form">
+    <label>USERNAME <span style="opacity:.6">(shown above your head)</span></label>
+    <input id="uname" autocomplete="off" maxlength="24" placeholder="e.g. skywalker">
+    <label>E-MAIL <span style="opacity:.6">(this becomes your game login)</span></label>
+    <input id="mail" type="email" autocomplete="email" placeholder="you@example.com">
+    <label>PASSWORD</label>
+    <input id="pw1" type="password" autocomplete="new-password" placeholder="at least 6 characters">
+    <button id="go">CREATE ACCOUNT</button>
+    <div id="msg"></div>
+  </div>
+
+  <div id="done" class="hide">
+    <div class="linkbox">
+      <b>Account created.</b><br>
+      1. Check your inbox for the WIPFLOW verification e-mail and click the link.<br>
+      2. Get the game here:<br><a id="dllink" href="https://github.com/Derekhhh966/WIPFLOW/releases/latest/download/WIPFLOW.exe.zip">Download WIPFLOW (Windows)</a><br>
+      3. Unzip, run WIPFLOW.exe, and <b>log in with this same e-mail</b>.
+    </div>
+    <button onclick="window.location='mailto:?subject=WIPFLOW%20download%20link&body=' + encodeURIComponent(document.getElementById('dllink').href)">MAIL THIS LINK TO MYSELF</button>
+    <div id="msg2" style="margin-top:14px;font-size:13px;color:#e8d9c2cc;white-space:pre-wrap"></div>
+  </div>
+</div>
+
+<script>
+const API_KEY = "AIzaSyC0e3AUdgB5CvA_XT8Q_n0OzYbO0B_qp5M";
+const PROJECT = "wipflo";
+const FS = "https://firestore.googleapis.com/v1/projects/" + PROJECT + "/databases/(default)/documents/";
+const IDP = "https://identitytoolkit.googleapis.com/v1/accounts:";
+
+const $ = id => document.getElementById(id);
+const msg = (t, cls) => { $("msg").textContent = t; $("msg").className = cls || ""; };
+
+$("uname").addEventListener("input", () => { msg(""); });
+
+$("go").onclick = async () => {
+  const uname = $("uname").value.trim().toLowerCase();
+  const mail = $("mail").value.trim().toLowerCase();
+  const pw = $("pw1").value;
+  if (!/^[a-z0-9_\-\.]{3,24}$/.test(uname)) return msg("pick a username (3-24 chars: letters, numbers, _ - .)", "bad");
+  if (!mail.includes("@")) return msg("enter a valid e-mail address", "bad");
+  if (pw.length < 6) return msg("the password needs at least 6 characters", "bad");
+  $("go").disabled = true; $("go").textContent = "CHECKING USERNAME...";
+  msg("");
+  try {
+    // username free? (public read; 404 = free)
+    let r = await fetch(FS + "usernames/" + encodeURIComponent(uname) + "?key=" + API_KEY);
+    if (r.ok) return fail("that username is already taken - pick another");
+    $("go").textContent = "CREATING ACCOUNT...";
+    r = await fetch(IDP + "signUp?key=" + API_KEY, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ email: mail, password: pw, returnSecureToken: true }) });
+    const reg = await r.json();
+    if (!r.ok) {
+      const c = reg.error && reg.error.message || "";
+      if (c.includes("EMAIL_EXISTS")) return fail("that e-mail already has a WIPFLOW account - open the game and log in instead");
+      if (c.includes("WEAK_PASSWORD")) return fail("the password needs at least 6 characters");
+      return fail("could not create the account (" + c + ")");
+    }
+    const uid = reg.localId, tok = reg.idToken;
+    const patch = (path, fields) => fetch(FS + path + "?key=" + API_KEY, {
+      method: "PATCH", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + tok },
+      body: JSON.stringify({ fields }) });
+    const fs = (k, v) => v === true ? { booleanValue: true } : typeof v === "number" ? { doubleValue: v } : { stringValue: String(v) };
+    const enc = f => { const o = {}; for (const k in f) o[k] = fs(k, f[k]); return o; };
+    $("go").textContent = "SAVING PROFILE...";
+    let w = await patch("profiles/" + uid, enc({
+      username: uname, email: mail, email_verified: false,
+      registered_at: Math.floor(Date.now() / 1000) }));
+    if (!w.ok) throw new Error("profile write " + w.status);
+    w = await patch("usernames/" + encodeURIComponent(uname), enc({ owner: uid, claimed_at: Math.floor(Date.now() / 1000) }));
+    if (!w.ok) throw new Error("username claim " + w.status);
+    w = await patch("emails/" + encodeURIComponent(mail), enc({ owner: uid }));
+    if (!w.ok) throw new Error("e-mail index " + w.status);
+    $("go").textContent = "SENDING VERIFICATION...";
+    r = await fetch(IDP + "sendOobCode?key=" + API_KEY, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ requestType: "VERIFY_EMAIL", idToken: tok }) });
+    if (!r.ok) $("msg2").textContent = "(the verification e-mail could not be sent - use RESEND in the game after logging in)";
+    $("form").classList.add("hide");
+    $("done").classList.remove("hide");
+  } catch (e) { fail("something went wrong: " + e.message); }
+  function fail(t) { msg(t, "bad"); $("go").disabled = false; $("go").textContent = "CREATE ACCOUNT"; }
+};
+</script>
+</body>
+</html>
